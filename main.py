@@ -1,57 +1,69 @@
-import logging
 import os
-from typing import Any, Dict
+import logging
+import requests
+import google.generativeai as genai
 from flask import Flask, request, jsonify
 
-# 設定日誌格式，這樣你在 GCP Logs 才能看清楚發生什麼事
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 app = Flask(__name__)
 
+# 配置環境變數
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+WEBHOOK_TOKEN = "my_private_token_123"
+
+# 初始化 Gemini
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+def send_tg_message(text):
+    """L5 通訊模組：發送訊息到 Telegram"""
+    if not TG_TOKEN or not TG_CHAT_ID:
+        logger.warning("Telegram 設定不完整，跳過發送")
+        return
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    try:
+        res = requests.post(url, json={"chat_id": TG_CHAT_ID, "text": text})
+        res.raise_for_status()
+    except Exception as e:
+        logger.error(f"Telegram 推送失敗: {e}")
+
 @app.route("/webhook", methods=["POST"])
-def webhook() -> Any:
-    """
-    TradingView Webhook 接收端
-    """
-    # 1. 解析 JSON 資料
-    payload: Dict[str, Any] | None = request.get_json(silent=True)
+def webhook():
+    data = request.get_json(silent=True)
+    if not data or data.get("token") != WEBHOOK_TOKEN:
+        return jsonify({"status": "unauthorized"}), 401
+
+    ticker = data.get("ticker", "Unknown")
+    action = data.get("action", "none")
     
-    if payload is None:
-        logger.error("收到空的或無效的 JSON")
-        return jsonify({"error": "invalid_json"}), 400
+    # L1 AI 評分
+    prompt = f"你是 AIES-2026 專家。標的:{ticker} 動作:{action}。請給予 1-10 分推薦度並簡述理由。"
+    try:
+        response = model.generate_content(prompt)
+        ai_opinion = response.text
+    except Exception as e:
+        ai_opinion = f"AI 分析暫時不可用: {e}"
 
-    # 2. 安全性檢查：驗證 Token
-    # 請確保 TradingView 的訊息裡有 "token": "my_private_token_123"
-    token = payload.get("token")
-    if token != "my_private_token_123":
-        logger.warning(f"授權失敗！收到錯誤的 Token: {token}")
-        return jsonify({"error": "unauthorized"}), 401
+    # 組合訊息推送到手機
+    status_emoji = "🟢" if "buy" in action.lower() else "🔴"
+    report = (
+        f"AIES-2026 系統回報\n"
+        f"------------------\n"
+        f"{status_emoji} 標的: {ticker}\n"
+        f"⚡ 動作: {action}\n\n"
+        f"🤖 AI 分析:\n{ai_opinion}"
+    )
+    send_tg_message(report)
+    
+    return jsonify({"status": "processed"}), 200
 
-    # 3. 取得交易參數 (對應 TradingView 的 JSON 欄位)
-    # 這裡我們統一使用 ticker 和 action，避免與 TradingView 內建變數混淆
-    ticker = payload.get("ticker", "Unknown")
-    action = payload.get("action", "none")
-
-    # 4. 核心邏輯：目前僅先印出訊號，未來在此接入 AI 判斷
-    output_msg = f"🚀 收到交易訊號! 標的: {ticker}, 動作: {action}"
-    print(output_msg)
-    logger.info(output_msg)
-
-    # 5. 回覆成功
-    return jsonify({
-        "status": "success", 
-        "received": {"ticker": ticker, "action": action}
-    }), 200
-
-@app.route("/health", methods=["GET"])
-@app.route("/", methods=["GET"])
-def health() -> Any:
-    """讓 GCP 知道這個服務還活著"""
-    return "Bot is running!", 200
+@app.route("/")
+def health():
+    return "AIES Agent is Active", 200
 
 if __name__ == "__main__":
-    # Cloud Run 會提供 PORT 環境變數，如果沒有則預設 8080
-    port = int(os.environ.get("PORT", 8080))
-    # 部署到雲端時 debug 需設為 False
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
