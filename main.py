@@ -1,68 +1,57 @@
 import logging
+import os
 from typing import Any, Dict
-
 from flask import Flask, request, jsonify
 
-
+# 設定日誌格式，這樣你在 GCP Logs 才能看清楚發生什麼事
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 app = Flask(__name__)
-
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> Any:
     """
     TradingView Webhook 接收端
-
-    功能：
-    - 驗證 token 是否等於 my_private_token_123
-    - 讀取幣種(symbol)與方向(side)，印出到 log/console
-    - 成功時回傳 200 OK
-
-    建議 TradingView 傳入的 JSON 格式類似：
-    {
-      "token": "my_private_token_123",
-      "symbol": "BTCUSDT",
-      "side": "long"  // 或 "short" / "buy" / "sell" 依你自己定義
-    }
     """
-    # 解析 JSON
-    payload: Dict[str, Any] | None = request.get_json(silent=True)  # type: ignore
+    # 1. 解析 JSON 資料
+    payload: Dict[str, Any] | None = request.get_json(silent=True)
+    
     if payload is None:
+        logger.error("收到空的或無效的 JSON")
         return jsonify({"error": "invalid_json"}), 400
 
-    # 1. 安全性：檢查 token
+    # 2. 安全性檢查：驗證 Token
+    # 請確保 TradingView 的訊息裡有 "token": "my_private_token_123"
     token = payload.get("token")
     if token != "my_private_token_123":
-        logger.warning("Invalid token from TradingView: %s", token)
+        logger.warning(f"授權失敗！收到錯誤的 Token: {token}")
         return jsonify({"error": "unauthorized"}), 401
 
-    # 2. 取得幣種與方向
-    symbol = payload.get("symbol")
-    side = payload.get("side")
+    # 3. 取得交易參數 (對應 TradingView 的 JSON 欄位)
+    # 這裡我們統一使用 ticker 和 action，避免與 TradingView 內建變數混淆
+    ticker = payload.get("ticker", "Unknown")
+    action = payload.get("action", "none")
 
-    # 這裡先簡單防呆一下
-    if not symbol or not side:
-        return jsonify({"error": "missing_symbol_or_side"}), 400
+    # 4. 核心邏輯：目前僅先印出訊號，未來在此接入 AI 判斷
+    output_msg = f"🚀 收到交易訊號! 標的: {ticker}, 動作: {action}"
+    print(output_msg)
+    logger.info(output_msg)
 
-    # 3. AI 邏輯預留：先印出幣種與方向
-    print(f"Received signal - symbol: {symbol}, side: {side}")
-    logger.info("Received signal - symbol: %s, side: %s", symbol, side)
-
-    # 之後你可以在這裡接入 Kimi / Gemini / Binance 等 AI + 交易邏輯
-
-    # 4. 成功回覆
-    return jsonify({"status": "ok"}), 200
-
+    # 5. 回覆成功
+    return jsonify({
+        "status": "success", 
+        "received": {"ticker": ticker, "action": action}
+    }), 200
 
 @app.route("/health", methods=["GET"])
+@app.route("/", methods=["GET"])
 def health() -> Any:
-    return jsonify({"status": "ok"}), 200
-
+    """讓 GCP 知道這個服務還活著"""
+    return "Bot is running!", 200
 
 if __name__ == "__main__":
-    # 本地啟動：python main.py
-    app.run(host="0.0.0.0", port=8080, debug=True)
-
+    # Cloud Run 會提供 PORT 環境變數，如果沒有則預設 8080
+    port = int(os.environ.get("PORT", 8080))
+    # 部署到雲端時 debug 需設為 False
+    app.run(host="0.0.0.0", port=port, debug=False)
