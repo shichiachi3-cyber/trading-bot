@@ -10,11 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt [cite: 1]
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
 ENV PORT=8080
 
-# 只保留這一行啟動指令，刪除其他 CMD 指令 [cite: 1]
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app [cite: 1]
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
