@@ -31,7 +31,7 @@ def analyze_with_gemini(signal_data):
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f"您現在是 AIES-2026 決策大腦。請分析：{json.dumps(signal_data)}"
+        prompt = f"您現在是 AIES-2026 決策大腦。請分析數據並提供建議：{json.dumps(signal_data)}"
         response = model.generate_content(prompt)
         
         return response.text if response else "⚠️ AI 回傳內容為空"
