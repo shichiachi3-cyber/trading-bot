@@ -1,70 +1,86 @@
 import os
+import json
 import logging
-import requests
 from flask import Flask, request, jsonify
 
-# 1. 日誌設定
+# 設定日誌監控 (對齊 V3.5 L7 監控指標)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def get_env_config():
-    return {
-        "GEMINI_KEY": os.environ.get("GEMINI_API_KEY", "").strip(),
-        "TG_TOKEN": os.environ.get("TELEGRAM_TOKEN", "").strip(),
-        "TG_CHAT_ID": os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
-        "WEBHOOK_TOKEN": "my_private_token_123"
-    }
+# 從環境變數獲取配置
+WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", "default_token")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_tg_message(token, chat_id, text):
-    if not token or not chat_id:
-        return "Missing Config"
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+def send_tg_message(text):
+    """L5 通訊層：發送訊息至 Telegram"""
+    import requests
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
-        res = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=15)
-        logger.info(f"📢 TG API Response: {res.text}")
-        return res.text
+        response = requests.post(url, json=payload, timeout=5)
+        return response.json()
     except Exception as e:
-        return str(e)
+        logger.error(f"TG 發送失敗: {e}")
+        return None
 
-@app.route("/test-tg")
-def test_tg():
-    config = get_env_config()
-    # 這裡只測試 Telegram，完全不碰 Gemini，確保路徑先通
-    result = send_tg_message(config["TG_TOKEN"], config["TG_CHAT_ID"], "🚀 <b>AIES 通訊測試成功</b>")
-    return f"Telegram 測試發送完成。API 回傳: {result}", 200
+def analyze_with_gemini(signal_data):
+    """L2 決策層：調用 Gemini 進行多維分析"""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # 建立符合 V3.5 邏輯的 Prompt 
+        prompt = f"""
+        你現在是 AIES-2026 決策大腦。請分析以下交易訊號：
+        數據：{json.dumps(signal_data)}
+        
+        請嚴格依照以下格式回傳：
+        1. 【信度評估】：0-100分 (依據規則引擎權重)
+        2. 【行動建議】：買入/賣出/觀望
+        3. 【風險分析】：VIX 狀態與止損建議
+        4. 【成本分析】：預期收益是否 > 2.5倍成本
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ AI 分析模組出錯: {str(e)}"
 
-@app.route("/webhook", methods=["POST"])
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    config = get_env_config()
+    # 1. 立即捕捉原始數據 (診斷 503 用)
     data = request.get_json(silent=True)
-    if not data or data.get("token") != config["WEBHOOK_TOKEN"]:
-        return jsonify({"status": "unauthorized"}), 401
+    logger.info(f"收到 Webhook 訊號: {data}")
 
-    ticker = data.get("ticker", "Unknown")
-    action = data.get("action", "none").upper()
+    if not data:
+        return jsonify({"error": "No JSON data received"}), 400
+
+    # 2. 安全驗證 (L6 安全執行) [cite: 4]
+    if data.get("token") != WEBHOOK_TOKEN:
+        logger.warning("Token 驗證失敗！")
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # 3. 執行分析 (MVP 階段採同步執行，確保你能看到結果)
+    # 若未來訊號過多導致 503，此處需改為異步處理
+    analysis_result = analyze_with_gemini(data)
     
-    # AI 分析邏輯：放在 Try 裡面，即使 AI 壞了，Telegram 也要能報信
-    ai_opinion = "AI 模組調用失敗"
-    if config["GEMINI_KEY"]:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=config["GEMINI_KEY"])
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(f"分析{ticker}的{action}訊號，給1-10分。")
-            ai_opinion = response.text
-        except Exception as e:
-            ai_opinion = f"AI Error: {str(e)}"
+    # 4. 推送至 L5 人機協同層 [cite: 3]
+    tg_text = f"🔔 *AIES-2026 訊號觸發*\n\n"
+    tg_text += f"標的：{data.get('ticker', '未知')}\n"
+    tg_text += f"價格：{data.get('price', '未知')}\n"
+    tg_text += f"---\n*AI 分析報告：*\n{analysis_result}"
+    
+    send_tg_message(tg_text)
 
-    report = f"<b>【AIES 訊號報告】</b>\n標的: {ticker}\n動作: {action}\n\n🤖 AI 評估:\n{ai_opinion}"
-    send_tg_message(config["TG_TOKEN"], config["TG_CHAT_ID"], report)
-    return jsonify({"status": "success"}), 200
+    return jsonify({"status": "processed", "message": "Signal received and analyzed"}), 200
 
-@app.route("/")
-def health():
-    return "AIES Agent is Running", 200
+@app.route('/test-tg')
+def test_tg():
+    res = send_tg_message("🚀 AIES 通訊測試成功")
+    return jsonify(res)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
