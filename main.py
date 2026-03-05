@@ -31,8 +31,7 @@ def analyze_with_gemini(signal_data):
     try:
         import google.generativeai as genai
         genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
+model = genai.GenerativeModel('models/gemini-1.5-flash')        
         # 建立符合 V3.5 邏輯的 Prompt 
         prompt = f"""
         你現在是 AIES-2026 決策大腦。請分析以下交易訊號：
