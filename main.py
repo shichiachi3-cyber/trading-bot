@@ -29,10 +29,10 @@ def analyze_with_gemini(signal_data):
             return "❌ 錯誤：未偵測到 GEMINI_API_KEY"
 
         genai.configure(api_key=GEMINI_API_KEY)
+        # 確保使用正確的模型名稱
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        prompt = f"您現在是 AIES-2026 決策大腦。請分析以下數據並提供信度評估與建議：{json.dumps(signal_data)}"
-        
+        prompt = f"您現在是 AIES-2026 決策大腦。請分析以下數據：{json.dumps(signal_data)}"
         response = model.generate_content(prompt)
         
         if response and response.text:
@@ -52,7 +52,6 @@ def webhook():
     tg_text = (
         f"🔔 *AIES-2026 訊號觸發*\n"
         f"📍 標的：{data.get('ticker', 'XAUUSD')}\n"
-        f"💰 價格：{data.get('price', '手動觸發')}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"*AI 決策報告：*\n\n{analysis_result}"
     )
