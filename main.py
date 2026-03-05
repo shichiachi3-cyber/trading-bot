@@ -25,7 +25,7 @@ def send_tg_message(text):
         logger.error(f"TG 發送失敗: {e}")
 
 def analyze_with_gemini(signal_data):
-    """L2 多維評估層：修正 404 模型路徑問題"""
+    """L2 多維評估層：解決 404 模型路徑與 API 版本衝突"""
     try:
         import google.generativeai as genai
         
@@ -34,27 +34,23 @@ def analyze_with_gemini(signal_data):
 
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 【關鍵修正】：直接使用模型簡稱，不帶 models/ 前綴
-        # 這是目前 google-generativeai 庫最穩定的調用方式
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # 策略 1：嘗試標準模型名稱 (最推薦)
+        prompt = f"您現在是 AIES-2026 決策大腦。請分析：{json.dumps(signal_data)}。請提供：1.信度評估(0-100) 2.行動建議 3.止損建議 4.成本審核(收益>2.5x)"
         
-        prompt = f"""
-        您現在是 AIES-2026 決策大腦。請分析：{json.dumps(signal_data)}
-        請提供：1.信度評估(0-100) 2.行動建議 3.止損建議 4.成本審核(收益>2.5x)
-        """
-        
-        response = model.generate_content(prompt)
-        return response.text if response else "⚠️ AI 回傳內容為空"
-            
-    except Exception as e:
-        # 如果簡稱失敗，嘗試帶上前綴的備用方案
         try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e1:
+            logger.warning(f"標準路徑失敗，嘗試備用路徑: {e1}")
+            # 策略 2：嘗試帶有 models/ 前綴的完整路徑
             model = genai.GenerativeModel('models/gemini-1.5-flash')
             response = model.generate_content(prompt)
             return response.text
-        except:
-            logger.error(f"Gemini 模組崩潰: {str(e)}")
-            return f"❌ AI 分析模組出錯: {str(e)}"
+            
+    except Exception as e:
+        logger.error(f"Gemini 模組終極崩潰: {str(e)}")
+        return f"❌ AI 分析模組出錯 (請確認 GCP 已啟用 Generative Language API): {str(e)}"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -63,14 +59,16 @@ def webhook():
 
     # L6 安全驗證
     if data.get("token") != WEBHOOK_TOKEN:
+        logger.warning("收到未經授權的 Token")
         return jsonify({"error": "Unauthorized"}), 403
 
-    # 執行分析並發送 Telegram
+    # 執行分析
     analysis_result = analyze_with_gemini(data)
     
+    # 推送 Telegram
     tg_text = (
         f"🔔 *AIES-2026 訊號觸發*\n\n"
-        f"📍 標的：{data.get('ticker', 'XAUUSD')}\n"
+        f"📍 標題：{data.get('ticker', 'XAUUSD')}\n"
         f"💰 價格：{data.get('price', '手動觸發')}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"*AI 決策報告：*\n\n{analysis_result}"
@@ -80,4 +78,6 @@ def webhook():
     return jsonify({"status": "success"}), 200
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    # 確保 Cloud Run 環境能正確讀取 Port
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
